@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortador de Clips</title>
+<meta name="description" content="Cortá un video largo en clips de 10 s a 5 min y descargá solo los que quieras. Gratis, sin subir tu video: todo pasa en tu navegador.">
+<meta property="og:title" content="Cortador de Clips">
+<meta property="og:description" content="Cortá un video largo en clips y descargá solo los que quieras. Sin subir nada, todo en tu navegador.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f2b41c'/%3E%3Cpath d='M9 8v16M16 8v16M23 8v16' stroke='%231b1400' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: editor de dos columnas (monitor + controles) arriba, grilla de clips abajo, barra de acción fija al pie */
+:root {
+  --bg: #eef0f2;
+  --panel: #ffffff;
+  --panel-2: #e3e6ea;
+  --fg: #16191d;
+  --muted: #5d6570;
+  --line: #cfd4da;
+  --accent: #e0a100;
+  --accent-ink: #1b1400;
+  --sel: #1f7a5a;
+  --sel-soft: #d6efe4;
+  --danger: #b3261e;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131519; --panel: #1b1e23; --panel-2: #262a31; --fg: #e9ebee; --muted: #9aa2ad;
+    --line: #333841; --accent: #f2b41c; --accent-ink: #1b1400; --sel: #4cc79a; --sel-soft: #173a2e; --danger: #ff7b72;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131519; --panel: #1b1e23; --panel-2: #262a31; --fg: #e9ebee; --muted: #9aa2ad;
+  --line: #333841; --accent: #f2b41c; --accent-ink: #1b1400; --sel: #4cc79a; --sel-soft: #173a2e; --danger: #ff7b72;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.5 var(--font-body);
+  padding: 0 20px 120px;
+}
+.wrap { max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-block: 24px 4px; }
+h1 { font: 700 30px/1.1 var(--font-display); margin: 0; letter-spacing: -0.01em; }
+h1 span { color: var(--accent); }
+.status { font: 13px var(--font-mono); color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--sel); }
+.dot.busy { background: var(--accent); animation: pulse 1s infinite; }
+.dot.err { background: var(--danger); }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* Drop zone */
+.drop {
+  border: 2px dashed var(--line); border-radius: 14px; background: var(--panel);
+  padding: 56px 24px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.drop:hover, .drop.over { border-color: var(--accent); }
+.drop strong { font: 600 22px var(--font-display); }
+.drop p { margin: 0; color: var(--muted); max-width: 52ch; }
+.drop .btn { margin-top: 8px; }
+
+/* Editor */
+.editor { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 860px) { .editor { grid-template-columns: 1fr; } }
+.monitor { align-self: start; background: #000; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+.monitor video { width: 100%; aspect-ratio: 16/9; background: #000; display: block; }
+.meta { background: var(--panel); padding: 12px 14px; display: flex; gap: 8px 18px; flex-wrap: wrap; font: 13px var(--font-mono); color: var(--muted); }
+.meta b { color: var(--fg); font-weight: 500; }
+.meta .name { color: var(--fg); overflow-wrap: anywhere; flex-basis: 100%; font-family: var(--font-body); font-weight: 600; font-size: 14px; }
+
+.controls { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.label { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font: 500 14px var(--font-mono); padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--fg); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.chip:hover { border-color: var(--accent); }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.custom { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+.custom input { width: 80px; font: 14px var(--font-mono); padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--fg); }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg label { display: flex; align-items: center; gap: 6px; font-size: 14px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: var(--panel-2); }
+.seg input { accent-color: var(--accent); margin: 0; }
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+.hint.warn { color: var(--danger); }
+
+.summary { font: 14px var(--font-mono); display: flex; gap: 6px 16px; flex-wrap: wrap; padding-top: 14px; border-top: 1px solid var(--line); }
+.summary b { font-weight: 500; color: var(--accent); }
+
+/* Timeline */
+.timeline-box { display: flex; flex-direction: column; gap: 6px; }
+.timeline { display: flex; height: 34px; border-radius: 8px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); }
+.timeline div { height: 100%; border-right: 1px solid var(--bg); background: var(--panel-2); cursor: pointer; min-width: 1px; }
+.timeline div.on { background: var(--sel); }
+.timeline div:hover { filter: brightness(1.15); outline: 2px solid var(--accent); outline-offset: -2px; }
+.ticks { display: flex; justify-content: space-between; font: 11px var(--font-mono); color: var(--muted); }
+
+/* Clip grid */
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.bar h2 { font: 700 20px var(--font-display); margin: 0; }
+.bar .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.clip {
+  background: var(--panel); border: 2px solid var(--line); border-radius: 10px; overflow: hidden;
+  display: flex; flex-direction: column; cursor: pointer; user-select: none; position: relative;
+  transition: border-color .12s;
+}
+.clip.on { border-color: var(--sel); }
+.clip.done::after { content: "✓ guardado"; position: absolute; top: 8px; right: 8px; font: 500 11px var(--font-mono); background: var(--sel); color: #fff; padding: 2px 6px; border-radius: 4px; }
+.clip.working { border-color: var(--accent); }
+.thumb { aspect-ratio: 16/9; background: var(--panel-2); position: relative; display: block; width: 100%; object-fit: cover; }
+.thumb-wrap { position: relative; }
+.play {
+  position: absolute; left: 8px; bottom: 8px; border: 0; border-radius: 6px; padding: 4px 9px;
+  background: rgba(0,0,0,.72); color: #fff; font: 500 12px var(--font-body); cursor: pointer;
+}
+.play:hover { background: var(--accent); color: var(--accent-ink); }
+.num { position: absolute; left: 8px; top: 8px; font: 500 12px var(--font-mono); background: rgba(0,0,0,.72); color: #fff; padding: 2px 6px; border-radius: 4px; }
+.clip-info { padding: 9px 10px; display: flex; align-items: center; gap: 8px; font: 13px var(--font-mono); font-variant-numeric: tabular-nums; }
+.clip-info input { width: 18px; height: 18px; accent-color: var(--sel); margin: 0; flex: none; }
+.clip-info .dur { margin-left: auto; color: var(--muted); }
+.prog { height: 3px; background: var(--accent); width: 0; transition: width .2s; }
+
+/* Buttons */
+.btn {
+  font: 600 14px var(--font-body); border-radius: 8px; padding: 9px 16px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--fg);
+}
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.07); }
+.btn.small { padding: 6px 10px; font-size: 13px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, .clip:focus-visible, .drop:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* Bottom action bar */
+.dock {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  background: var(--panel); border-top: 1px solid var(--line);
+  padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px));
+}
+.dock-in { max-width: 1280px; margin: 0 auto; display: flex; align-items: center; gap: 12px 20px; flex-wrap: wrap; }
+.dock .count { font: 14px var(--font-mono); font-variant-numeric: tabular-nums; }
+.dock .count b { font-weight: 500; }
+.dock .spacer { flex: 1; }
+.dock .job { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
+.dock .job-text { font: 13px var(--font-mono); color: var(--muted); }
+.meter { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.meter div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
+@media (max-width: 520px) {
+  body { padding: 0 16px 150px; }
+  .dock { padding-left: 16px; padding-right: 16px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+.foot { font-size: 13px; color: var(--muted); padding-block: 12px; border-top: 1px solid var(--line); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Cortador de <span>Clips</span></h1>
+    <div class="status" id="engineStatus"><span class="dot" id="engineDot"></span><span id="engineText">Motor de corte sin cargar</span></div>
+  </header>
+
+  <label class="drop" id="drop" tabindex="0">
+    <strong>Soltá acá tu video largo</strong>
+    <p>MP4, MOV, MKV o WEBM. El video no se sube a ningún lado: se corta en tu computadora, dentro del navegador.</p>
+    <span class="btn primary">Elegir video</span>
+    <input type="file" id="fileInput" accept="video/*,.mkv,.mov,.mp4,.webm,.m4v,.ts" hidden>
+  </label>
+
+  <section class="editor" id="editor" hidden>
+    <div class="monitor">
+      <video id="player" controls playsinline preload="metadata"></video>
+      <div class="meta">
+        <span class="name" id="metaName"></span>
+        <span>Duración <b id="metaDur">–</b></span>
+        <span>Tamaño <b id="metaSize">–</b></span>
+        <span>Resolución <b id="metaRes">–</b></span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="group">
+        <span class="label">Largo de cada clip</span>
+        <div class="chips" id="chips"></div>
+        <div class="custom">
+          <span>Otro:</span>
+          <input type="number" id="customSec" min="2" step="1" placeholder="seg">
+          <span>segundos</span>
+        </div>
+      </div>
+
+      <div class="group">
+        <span class="label">Sobrante del final</span>
+        <div class="seg" id="remainderSeg">
+          <label><input type="radio" name="remainder" value="keep" checked> Clip corto aparte</label>
+          <label><input type="radio" name="remainder" value="merge"> Sumar al último</label>
+          <label><input type="radio" name="remainder" value="drop"> Descartar</label>
+        </div>
+      </div>
+
+      <div class="group">
+        <span class="label">Modo de corte</span>
+        <div class="seg">
+          <label><input type="radio" name="mode" value="fast" checked> Rápido</label>
+          <label><input type="radio" name="mode" value="precise"> Preciso</label>
+        </div>
+        <p class="hint" id="modeHint"></p>
+      </div>
+
+      <div class="summary" id="summary"></div>
+      <button class="btn small" id="changeVideo" type="button">Cambiar video</button>
+    </div>
+  </section>
+
+  <section class="timeline-box" id="timelineBox" hidden>
+    <div class="timeline" id="timeline" role="group" aria-label="Línea de tiempo de clips"></div>
+    <div class="ticks" id="ticks"></div>
+  </section>
+
+  <section id="clipsSection" hidden>
+    <div class="bar" style="margin-bottom:12px">
+      <h2 id="clipsTitle">Clips</h2>
+      <div class="actions">
+        <button class="btn small" id="selAll" type="button">Marcar todos</button>
+        <button class="btn small" id="selNone" type="button">Desmarcar todos</button>
+        <button class="btn small" id="selInvert" type="button">Invertir</button>
+      </div>
+    </div>
+    <p class="hint" style="margin:0 0 12px">Tocá un clip para marcarlo o desmarcarlo. Shift + clic marca un rango. “Ver” lo reproduce en el monitor.</p>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <footer class="foot">
+    Tu video nunca sale de tu computadora: se procesa dentro del navegador con ffmpeg.wasm. Funciona mejor en Chrome o Edge de escritorio.
+  </footer>
+</div>
+
+<div class="dock" id="dock" hidden>
+  <div class="dock-in">
+    <span class="count" id="selCount"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="dlFolder" type="button" hidden>Guardar en una carpeta…</button>
+    <button class="btn primary" id="dlFiles" type="button">Descargar seleccionados</button>
+    <button class="btn" id="cancelJob" type="button" hidden>Cancelar</button>
+    <div class="job" id="job" hidden>
+      <span class="job-text" id="jobText"></span>
+      <div class="meter"><div id="jobMeter"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- Motor: ffmpeg.wasm en un worker propio ---------- */
+const CORE_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js';
+const WASM_URL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm';
+
+const WORKER_SRC = `
+let core;
+self.onmessage = async ({ data: { id, type, data } }) => {
+  try {
+    let res = true, transfer = [];
+    if (type === 'load') {
+      importScripts(data.coreURL);
+      core = await self.createFFmpegCore({
+        mainScriptUrlOrBlob: data.coreURL + '#' + btoa(JSON.stringify({ wasmURL: data.wasmURL, workerURL: '' }))
+      });
+      core.setLogger(e => self.postMessage({ type: 'log', data: e }));
+      core.setProgress(e => self.postMessage({ type: 'progress', data: e }));
+    } else if (type === 'mount') {
+      try { core.FS.unmount('/in'); } catch (e) {}
+      try { core.FS.mkdir('/in'); } catch (e) {}
+      core.FS.mount(core.FS.filesystems.WORKERFS, { files: [data.file] }, '/in');
+    } else if (type === 'exec') {
+      core.setTimeout(-1);
+      core.exec(...data.args);
+      res = core.ret;
+      core.reset();
+    } else if (type === 'read') {
+      res = core.FS.readFile(data.path);
+      transfer = [res.buffer];
+    } else if (type === 'unlink') {
+      try { core.FS.unlink(data.path); } catch (e) {}
+    }
+    self.postMessage({ id, type: 'ok', data: res }, transfer);
+  } catch (e) {
+    self.postMessage({ id, type: 'err', data: String((e && e.message) || e) });
+  }
+};`;
+
+const engine = {
+  worker: null, ready: null, seq: 0, pending: new Map(), logs: [], onProgress: null,
+  start() {
+    if (this.ready) return this.ready;
+    this.worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })));
+    this.worker.onmessage = ({ data }) => {
+      if (data.type === 'log') { this.logs.push(data.data.message); if (this.logs.length > 400) this.logs.shift(); return; }
+      if (data.type === 'progress') { this.onProgress && this.onProgress(data.data); return; }
+      const p = this.pending.get(data.id); if (!p) return;
+      this.pending.delete(data.id);
+      data.type === 'ok' ? p.resolve(data.data) : p.reject(new Error(data.data));
+    };
+    this.worker.onerror = (e) => { setEngine('err', 'Error del motor: ' + (e.message || 'desconocido')); };
+    setEngine('busy', 'Cargando motor de corte (~30 MB, solo la primera vez)…');
+    this.ready = this.call('load', { coreURL: CORE_URL, wasmURL: WASM_URL })
+      .then(() => { setEngine('ok', 'Motor listo'); })
+      .catch((e) => { this.ready = null; this.worker.terminate(); setEngine('err', 'No se pudo cargar el motor. ¿Hay conexión a internet? (' + e.message + ')'); throw e; });
+    return this.ready;
+  },
+  call(type, data) {
+    const id = ++this.seq;
+    return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, type, data }); });
+  },
+  async exec(args) { this.logs = []; return this.call('exec', { args }); },
+  restart() {
+    if (this.worker) this.worker.terminate();
+    this.pending.forEach(p => p.reject(new Error('cancelado')));
+    this.pending.clear(); this.worker = null; this.ready = null; state.mounted = null;
+  }
+};
+
+function setEngine(kind, text) {
+  document.getElementById('engineDot').className = 'dot ' + kind;
+  document.getElementById('engineText').textContent = text;
+}
+
+/* ---------- Estado ---------- */
+const PRESETS = [10, 15, 20, 30, 40, 60, 120, 300];
+const state = {
+  file: null, url: null, duration: 0, width: 0, height: 0,
+  clipLen: 30, clips: [], lastIndex: null, mounted: null, busy: false, cancel: false,
+  thumbToken: 0
+};
+
+const $ = (id) => document.getElementById(id);
+const player = $('player');
+
+function fmt(t, withMs) {
+  t = Math.max(0, t);
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = Math.floor(t % 60);
+  const base = (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(s).padStart(2, '0');
+  if (!withMs) return base;
+  return base + '.' + String(Math.round((t % 1) * 10)).slice(0, 1);
+}
+function fmtLen(sec) { return sec < 60 ? sec + 's' : (sec % 60 ? (sec / 60).toFixed(1) + 'min' : sec / 60 + ' min'); }
+function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : (b / 1e6).toFixed(1) + ' MB'; }
+function fileTag(t) { const m = Math.floor(t / 60), s = Math.floor(t % 60); return String(m).padStart(2, '0') + 'm' + String(s).padStart(2, '0') + 's'; }
+
+/* ---------- Chips de duración ---------- */
+function renderChips() {
+  const c = $('chips'); c.innerHTML = '';
+  PRESETS.forEach(sec => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.textContent = sec < 60 ? sec + 's' : sec / 60 + ' min';
+    b.setAttribute('aria-pressed', String(sec === state.clipLen));
+    b.onclick = () => { $('customSec').value = ''; setClipLen(sec); };
+    c.appendChild(b);
+  });
+}
+function setClipLen(sec) {
+  state.clipLen = sec;
+  renderChips();
+  buildClips();
+}
+$('customSec').addEventListener('change', (e) => {
+  const v = Math.round(Number(e.target.value));
+  if (v >= 2) setClipLen(v);
+});
+document.querySelectorAll('input[name="remainder"]').forEach(r => r.addEventListener('change', buildClips));
+document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', updateModeHint));
+function mode() { return document.querySelector('input[name="mode"]:checked').value; }
+function updateModeHint() {
+  $('modeHint').className = 'hint';
+  $('modeHint').textContent = mode() === 'fast'
+    ? 'Copia el video sin recodificar: tarda segundos y no pierde calidad. El inicio de cada clip se ajusta al fotograma clave más cercano (puede empezar 1–2 s antes).'
+    : 'Recodifica cada clip para que empiece y termine exacto. Mucho más lento dentro del navegador: un clip de 30 s en 1080p puede tardar varios minutos.';
+  if (mode() === 'precise') $('modeHint').classList.add('warn');
+}
+
+/* ---------- Carga de video ---------- */
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('fileInput').click(); } });
+$('fileInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) handleFile(f); e.target.value = ''; });
+$('changeVideo').onclick = () => { if (!state.busy) $('fileInput').click(); };
+
+async function handleFile(file) {
+  if (state.busy) return;
+  if (state.url) URL.revokeObjectURL(state.url);
+  state.file = file; state.url = URL.createObjectURL(file); state.mounted = null;
+  state.duration = 0; state.width = 0; state.height = 0;
+  $('metaName').textContent = file.name;
+  $('metaSize').textContent = fmtSize(file.size);
+  $('metaDur').textContent = '…'; $('metaRes').textContent = '…';
+  drop.hidden = true; $('editor').hidden = false;
+  engine.start().catch(() => {});
+
+  player.src = state.url;
+  const ok = await new Promise(res => {
+    const done = (v) => { player.onloadedmetadata = null; player.onerror = null; res(v); };
+    player.onloadedmetadata = () => done(isFinite(player.duration) && player.duration > 0);
+    player.onerror = () => done(false);
+    setTimeout(() => done(false), 15000);
+  });
+  if (ok) {
+    state.duration = player.duration; state.width = player.videoWidth; state.height = player.videoHeight;
+  } else {
+    // El navegador no puede reproducir este formato: leemos la duración con ffmpeg
+    try {
+      await engine.start(); await ensureMounted();
+      await engine.exec(['-hide_banner', '-i', '/in/' + file.name]);
+      const log = engine.logs.join('\n');
+      const d = log.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      const r = log.match(/Video:.*?(\d{2,5})x(\d{2,5})/);
+      if (d) state.duration = (+d[1]) * 3600 + (+d[2]) * 60 + parseFloat(d[3]);
+      if (r) { state.width = +r[1]; state.height = +r[2]; }
+    } catch (e) {}
+    if (!state.duration) { $('metaDur').textContent = 'no se pudo leer'; setEngine('err', 'No se pudo leer este archivo de video.'); return; }
+  }
+  $('metaDur').textContent = fmt(state.duration);
+  $('metaRes').textContent = state.width ? state.width + '×' + state.height : '–';
+  buildClips();
+}
+
+async function ensureMounted() {
+  await engine.start();
+  if (state.mounted === state.file) return;
+  await engine.call('mount', { file: state.file });
+  state.mounted = state.file;
+}
+
+/* ---------- Armado de clips ---------- */
+function buildClips() {
+  if (!state.duration) return;
+  const L = state.clipLen, D = state.duration;
+  const rem = document.querySelector('input[name="remainder"]:checked').value;
+  const prevSel = new Map(state.clips.map(c => [c.start.toFixed(2) + '-' + c.end.toFixed(2), c.selected]));
+  const clips = [];
+  for (let s = 0; s < D - 0.05; s += L) clips.push({ start: s, end: Math.min(s + L, D) });
+  const last = clips[clips.length - 1];
+  if (clips.length > 1 && last.end - last.start < L - 0.05) {
+    if (rem === 'merge') { clips.pop(); clips[clips.length - 1].end = D; }
+    else if (rem === 'drop') clips.pop();
+  }
+  state.clips = clips.map((c, i) => ({
+    ...c, i, selected: prevSel.has(c.start.toFixed(2) + '-' + c.end.toFixed(2)) ? prevSel.get(c.start.toFixed(2) + '-' + c.end.toFixed(2)) : true,
+    thumb: null, done: false
+  }));
+  state.lastIndex = null;
+  renderClips();
+  makeThumbs();
+}
+
+function renderClips() {
+  const grid = $('grid'); grid.innerHTML = '';
+  const tl = $('timeline'); tl.innerHTML = '';
+  const D = state.duration;
+  state.clips.forEach(c => {
+    const card = document.createElement('div');
+    card.className = 'clip'; card.tabIndex = 0; card.dataset.i = c.i;
+    card.innerHTML =
+      '<div class="thumb-wrap"><img class="thumb" alt=""><span class="num">#' + String(c.i + 1).padStart(2, '0') + '</span>' +
+      '<button class="play" type="button">▶ Ver</button></div>' +
+      '<div class="clip-info"><input type="checkbox" aria-label="Incluir clip ' + (c.i + 1) + '">' +
+      '<span>' + fmt(c.start) + '–' + fmt(c.end) + '</span><span class="dur">' + Math.round(c.end - c.start) + 's</span></div>' +
+      '<div class="prog"></div>';
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.play')) { e.stopPropagation(); previewClip(c); return; }
+      toggle(c.i, e.shiftKey, e.target.tagName === 'INPUT' ? e.target.checked : undefined);
+    });
+    card.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(c.i, e.shiftKey); } });
+    c.el = card; grid.appendChild(card);
+
+    const seg = document.createElement('div');
+    seg.style.flex = String((c.end - c.start) / D);
+    seg.title = '#' + (c.i + 1) + '  ' + fmt(c.start) + '–' + fmt(c.end);
+    seg.onclick = (e) => toggle(c.i, e.shiftKey);
+    c.seg = seg; tl.appendChild(seg);
+    paint(c);
+  });
+  const ticks = $('ticks'); ticks.innerHTML = '';
+  for (let k = 0; k <= 4; k++) { const s = document.createElement('span'); s.textContent = fmt(D * k / 4); ticks.appendChild(s); }
+  $('timelineBox').hidden = false; $('clipsSection').hidden = false; $('dock').hidden = false;
+  $('clipsTitle').textContent = state.clips.length + ' clips de ' + fmtLen(state.clipLen);
+  updateCounts();
+}
+
+function paint(c) {
+  c.el.classList.toggle('on', c.selected);
+  c.el.classList.toggle('done', c.done);
+  c.el.querySelector('input').checked = c.selected;
+  c.seg.classList.toggle('on', c.selected);
+}
+function toggle(i, shift, forced) {
+  if (state.busy) return;
+  const c = state.clips[i];
+  const val = forced !== undefined ? forced : !c.selected;
+  if (shift && state.lastIndex !== null) {
+    const [a, b] = [Math.min(state.lastIndex, i), Math.max(state.lastIndex, i)];
+    for (let k = a; k <= b; k++) { state.clips[k].selected = val; paint(state.clips[k]); }
+  } else { c.selected = val; paint(c); }
+  state.lastIndex = i;
+  updateCounts();
+}
+function setAll(fn) { if (state.busy) return; state.clips.forEach(c => { c.selected = fn(c); paint(c); }); updateCounts(); }
+$('selAll').onclick = () => setAll(() => true);
+$('selNone').onclick = () => setAll(() => false);
+$('selInvert').onclick = () => setAll(c => !c.selected);
+
+function updateCounts() {
+  const sel = state.clips.filter(c => c.selected);
+  const total = sel.reduce((a, c) => a + c.end - c.start, 0);
+  $('selCount').innerHTML = '<b>' + sel.length + '</b> de ' + state.clips.length + ' clips · ' + fmt(total) + ' en total';
+  $('summary').innerHTML = '<span><b>' + state.clips.length + '</b> clips</span><span>de <b>' + fmtLen(state.clipLen) + '</b></span><span><b>' + sel.length + '</b> marcados</span>';
+  $('dlFiles').disabled = state.busy || !sel.length;
+  $('dlFolder').disabled = state.busy || !sel.length;
+}
+
+/* ---------- Preview ---------- */
+let previewEnd = null;
+function previewClip(c) {
+  previewEnd = c.end;
+  player.currentTime = c.start;
+  player.play().catch(() => {});
+  player.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+player.addEventListener('timeupdate', () => { if (previewEnd !== null && player.currentTime >= previewEnd) { player.pause(); previewEnd = null; } });
+player.addEventListener('seeking', () => { if (previewEnd !== null && (player.currentTime > previewEnd + 1)) previewEnd = null; });
+
+/* ---------- Miniaturas ---------- */
+async function makeThumbs() {
+  const token = ++state.thumbToken;
+  if (!state.width) return;
+  const v = document.createElement('video');
+  v.muted = true; v.preload = 'auto'; v.src = state.url;
+  await new Promise(r => { v.onloadeddata = r; v.onerror = r; setTimeout(r, 8000); });
+  const cv = document.createElement('canvas'); cv.width = 320; cv.height = Math.round(320 * state.height / state.width) || 180;
+  const ctx = cv.getContext('2d');
+  for (const c of state.clips) {
+    if (token !== state.thumbToken) break;
+    const t = Math.min(c.start + Math.min(1.5, (c.end - c.start) / 3), state.duration - 0.1);
+    const ok = await new Promise(r => { const to = setTimeout(() => r(false), 5000); v.onseeked = () => { clearTimeout(to); r(true); }; v.currentTime = t; });
+    if (!ok || token !== state.thumbToken) continue;
+    ctx.drawImage(v, 0, 0, cv.width, cv.height);
+    c.el.querySelector('img').src = cv.toDataURL('image/jpeg', 0.7);
+  }
+  v.removeAttribute('src'); v.load();
+}
+
+/* ---------- Corte y descarga ---------- */
+if ('showDirectoryPicker' in window) $('dlFolder').hidden = false;
+$('dlFiles').onclick = () => runJob(null);
+$('dlFolder').onclick = async () => {
+  let dir;
+  try { dir = await window.showDirectoryPicker({ mode: 'readwrite' }); } catch (e) { return; }
+  runJob(dir);
+};
+$('cancelJob').onclick = () => {
+  state.cancel = true;
+  engine.restart();
+  engine.start().catch(() => {});
+};
+
+function outName(c, ext) {
+  const base = state.file.name.replace(/\.[^.]+$/, '').replace(/[^\w\-áéíóúñÁÉÍÓÚÑ ]+/g, '').trim().replace(/\s+/g, '_') || 'video';
+  return base + '_clip' + String(c.i + 1).padStart(2, '0') + '_' + fileTag(c.start) + '-' + fileTag(c.end) + '.' + ext;
+}
+
+async function runJob(dir) {
+  const todo = state.clips.filter(c => c.selected);
+  if (!todo.length || state.busy) return;
+  state.busy = true; state.cancel = false; updateCounts();
+  $('job').hidden = false; $('cancelJob').hidden = false; $('dlFiles').hidden = true; $('dlFolder').hidden = true;
+  const meter = $('jobMeter'), text = $('jobText');
+  const precise = mode() === 'precise';
+  const inExt = (state.file.name.match(/\.([^.]+)$/) || [, 'mp4'])[1].toLowerCase();
+  const ext = precise ? 'mp4' : (['mp4', 'mov', 'mkv', 'webm', 'm4v'].includes(inExt) ? inExt : 'mkv');
+  let doneCount = 0, failed = 0;
+
+  try {
+    text.textContent = 'Preparando motor…';
+    await ensureMounted();
+    for (const c of todo) {
+      if (state.cancel) break;
+      const n = doneCount + failed + 1;
+      const name = outName(c, ext);
+      text.textContent = 'Cortando clip ' + n + ' de ' + todo.length + ' · ' + fmt(c.start) + '–' + fmt(c.end);
+      c.el.classList.add('working'); c.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      const bar = c.el.querySelector('.prog');
+      engine.onProgress = (p) => {
+        const f = Math.max(0, Math.min(1, p.progress || 0));
+        bar.style.width = (f * 100) + '%';
+        meter.style.width = ((n - 1 + f) / todo.length * 100) + '%';
+      };
+      const dur = (c.end - c.start).toFixed(3);
+      const args = precise
+        ? ['-hide_banner', '-ss', c.start.toFixed(3), '-i', '/in/' + state.file.name, '-t', dur,
+           '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '20',
+           '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', '/' + name]
+        : ['-hide_banner', '-ss', c.start.toFixed(3), '-i', '/in/' + state.file.name, '-t', dur,
+           '-map', '0:v?', '-map', '0:a?', '-c', 'copy', '-avoid_negative_ts', 'make_zero', '/' + name];
+      try {
+        const ret = await engine.exec(args);
+        if (state.cancel) break;
+        const data = await engine.call('read', { path: '/' + name });
+        await engine.call('unlink', { path: '/' + name });
+        if (ret !== 0 && (!data || data.length < 1000)) throw new Error('ffmpeg ' + ret);
+        const blob = new Blob([data], { type: ext === 'webm' ? 'video/webm' : ext === 'mkv' ? 'video/x-matroska' : 'video/mp4' });
+        await save(blob, name, dir);
+        c.done = true; doneCount++;
+      } catch (e) {
+        if (state.cancel) break;
+        failed++; console.error(e, engine.logs.slice(-15).join('\n'));
+      }
+      bar.style.width = '0'; c.el.classList.remove('working'); paint(c);
+      meter.style.width = ((doneCount + failed) / todo.length * 100) + '%';
+    }
+  } catch (e) {
+    text.textContent = 'Error: ' + e.message;
+  }
+
+  state.busy = false;
+  $('cancelJob').hidden = true; $('dlFiles').hidden = false;
+  if ('showDirectoryPicker' in window) $('dlFolder').hidden = false;
+  state.clips.forEach(c => { c.el.classList.remove('working'); c.el.querySelector('.prog').style.width = '0'; });
+  updateCounts();
+  text.textContent = state.cancel
+    ? 'Cancelado. Se guardaron ' + doneCount + ' clips.'
+    : 'Listo: ' + doneCount + ' clips guardados' + (failed ? ' · ' + failed + ' fallaron (probá el modo Preciso para esos)' : '') + (dir ? ' en la carpeta elegida.' : ' en Descargas.');
+}
+
+async function save(blob, name, dir) {
+  if (dir) {
+    const fh = await dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable(); await w.write(blob); await w.close();
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  await new Promise(r => setTimeout(r, 400)); // pausa corta para que el navegador acepte descargas seguidas
+}
+
+renderChips();
+updateModeHint();
+</script>
+</body>
+</html>
